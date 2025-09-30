@@ -1,302 +1,656 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
+  Alert,
   Image,
   Linking,
-  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { 
-  Phone, 
-  Mail, 
-  Globe, 
-  MapPin, 
-  Star, 
-  AlertTriangle,
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Phone,
+  Mail,
+  Globe,
   Heart,
+  MessageCircle,
+  Shield,
+  ArrowUpRight,
+  ArrowRight,
+  Sparkles,
   Users,
-  MessageCircle
+  Bookmark,
 } from 'lucide-react-native';
-import { emergencyContacts, professionalContacts } from '@/mocks/professional-help';
-import { ProfessionalContact, EmergencyContact } from '@/types/professional-help';
-import Colors from '@/constants/colors';
+import { useRouter } from 'expo-router';
 
-type FilterType = 'all' | 'psychologist' | 'therapist' | 'ngo' | 'crisis_line';
+import Colors from '@/constants/colors';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  emergencyContacts,
+  professionalContacts,
+} from './mocks/professional-help';
+import { Community, CommunityInput } from '@/types/social';
+import {
+  ProfessionalContact,
+  EmergencyContact,
+} from '@/types/professional-help';
+import {
+  COMMUNITIES_QUERY_KEY,
+  createCommunity,
+  fetchCommunities,
+  joinCommunity,
+  leaveCommunity,
+} from '@/services/communities';
+
+const FILTERS = [
+  { id: 'all', label: 'Todo' },
+  { id: 'psychologist', label: 'Psicologia' },
+  { id: 'therapist', label: 'Terapia' },
+  { id: 'ngo', label: 'Organizaciones' },
+  { id: 'crisis_line', label: 'Crisis' },
+] as const;
+
+type FilterType = (typeof FILTERS)[number]['id'];
+
+type Story = {
+  id: string;
+  author: string;
+  focus: string;
+  title: string;
+  summary: string;
+  reactions: number;
+  replies: number;
+};
+
+const COMMUNITY_STORIES: Story[] = [
+  {
+    id: 'story-1',
+    author: 'Ana - Comunidad Ansiedad',
+    focus: 'Mindfulness diario',
+    title: 'Como la respiracion guiada cambio mis tardes',
+    summary:
+      'Comparto la rutina de cinco minutos que uso antes de reuniones para bajar el pulso y sentir control.',
+    reactions: 86,
+    replies: 14,
+  },
+  {
+    id: 'story-2',
+    author: 'Marc - Resiliencia',
+    focus: 'Gestion del estres',
+    title: 'Aprendi a pedir ayuda sin sentir culpa',
+    summary:
+      'Un hilo sobre identificar senales de agotamiento y como hablo con mi equipo cuando necesito una pausa.',
+    reactions: 63,
+    replies: 18,
+  },
+  {
+    id: 'story-3',
+    author: 'Laura - Comunidad Sueño',
+    focus: 'Rutinas nocturnas',
+    title: 'Checklist nocturna para dormir en 15 minutos',
+    summary:
+      'Incluye respiracion, ambiente y un mantra de despedida del dia para cerrar pendientes mentales.',
+    reactions: 91,
+    replies: 22,
+  },
+];
+
+const QUICK_ACTIONS = [
+  {
+    id: 'create-room',
+    icon: Sparkles,
+    label: 'Crear sala segura',
+    description: 'Organiza micro sesiones privadas con tu comunidad.',
+    target: '/(tabs)/communities',
+  },
+  {
+    id: 'share-experience',
+    icon: MessageCircle,
+    label: 'Compartir experiencia',
+    description: 'Publica una vivencia para inspirar a otros miembros.',
+    target: '/(tabs)/achievements',
+  },
+  {
+    id: 'premium-guides',
+    icon: Bookmark,
+    label: 'Guias premium',
+    description: 'Accede a cursos y contenidos exclusivos verificados.',
+    target: '/(tabs)/courses',
+  },
+] as const;
+
+const gradientStops = ['#4338CA', '#7C3AED', '#EC4899'] as const;
+
+const availabilityColors: Record<string, string> = {
+  available: '#16a34a',
+  busy: '#f59e0b',
+  offline: '#ef4444',
+};
+
+const formatAvailabilityLabel = (value: string) => {
+  switch (value) {
+    case 'available':
+      return 'Disponible';
+    case 'busy':
+      return 'Agenda llena';
+    default:
+      return 'Consulta horarios';
+  }
+};
 
 export default function ProfessionalHelpScreen() {
-  const [selectedFilter, setSelectedFilter] = useState<FilterType>('all');
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { user, isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
 
-  const filteredContacts = professionalContacts.filter(contact => 
-    selectedFilter === 'all' || contact.type === selectedFilter
-  );
+  const [selectedFilter, setSelectedFilter] = useState<FilterType>('all');
+  const [communityName, setCommunityName] = useState('');
+  const [communityFocus, setCommunityFocus] = useState('Apoyo emocional');
 
-  const handleCall = (phone: string) => {
-    Linking.openURL(`tel:${phone}`);
-  };
+  const communitiesQuery = useQuery({
+    queryKey: COMMUNITIES_QUERY_KEY,
+    queryFn: () => fetchCommunities(user?.id ?? ''),
+    enabled: Boolean(user?.id),
+  });
 
-  const handleEmail = (email: string) => {
-    Linking.openURL(`mailto:${email}`);
-  };
+  const createCommunityMutation = useMutation({
+    mutationFn: (payload: CommunityInput) => {
+      if (!user) {
+        throw new Error('Debes iniciar sesion para crear comunidades.');
+      }
+      return createCommunity(user.id, payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: COMMUNITIES_QUERY_KEY });
+      setCommunityName('');
+      setCommunityFocus('Apoyo emocional');
+      Alert.alert('Listo', 'Tu comunidad se publico y ya puede recibir miembros.');
+    },
+    onError: error => {
+      Alert.alert('No pudimos crear la comunidad', error instanceof Error ? error.message : 'Intenta mas tarde.');
+    },
+  });
 
-  const handleWebsite = (website: string) => {
+  const joinCommunityMutation = useMutation({
+    mutationFn: (communityId: string) => {
+      if (!user) {
+        throw new Error('Necesitas una cuenta para unirte.');
+      }
+      return joinCommunity(user.id, communityId);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: COMMUNITIES_QUERY_KEY }),
+  });
+
+  const leaveCommunityMutation = useMutation({
+    mutationFn: (communityId: string) => {
+      if (!user) {
+        throw new Error('Necesitas una cuenta para salir de una comunidad.');
+      }
+      return leaveCommunity(user.id, communityId);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: COMMUNITIES_QUERY_KEY }),
+  });
+
+  const filteredContacts = useMemo(() => {
+    if (selectedFilter === 'all') return professionalContacts;
+    return professionalContacts.filter(pro => pro.type === selectedFilter);
+  }, [selectedFilter]);
+
+  const handleCall = (phone: string) => Linking.openURL(`tel:${phone}`);
+  const handleEmail = (email: string) => Linking.openURL(`mailto:${email}`);
+  const handleWebsite = (website?: string) => {
+    if (!website) return;
     Linking.openURL(website);
   };
 
   const handleEmergencyCall = (contact: EmergencyContact) => {
     Alert.alert(
-      'Emergency Contact',
-      `Call ${contact.name}?\n\n${contact.description}`,
+      'Linea directa',
+      `Llamar a ${contact.name}?\n\n${contact.description}`,
       [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Call Now', onPress: () => handleCall(contact.phone), style: 'destructive' },
-      ]
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Llamar ahora', onPress: () => handleCall(contact.phone), style: 'destructive' },
+      ],
     );
   };
 
-  const renderEmergencyContact = (contact: EmergencyContact) => (
-    <TouchableOpacity
-      key={contact.id}
-      style={styles.emergencyCard}
-      onPress={() => handleEmergencyCall(contact)}
-      testID={`emergency-contact-${contact.id}`}
-    >
-      <View style={styles.emergencyHeader}>
-        <AlertTriangle color="#FF4444" size={24} />
-        <View style={styles.emergencyInfo}>
-          <Text style={styles.emergencyName}>{contact.name}</Text>
-          <Text style={styles.emergencyPhone}>{contact.phone}</Text>
-        </View>
-        {contact.available24h && (
-          <View style={styles.available24Badge}>
-            <Text style={styles.available24Text}>24/7</Text>
-          </View>
-        )}
-      </View>
-      <Text style={styles.emergencyDescription}>{contact.description}</Text>
-    </TouchableOpacity>
-  );
+  const handleStoryPress = (story: Story) => {
+    if (!isAuthenticated) {
+      Alert.alert('Necesitas iniciar sesion', 'Ingresa o crea una cuenta para comentar en historias.');
+      return;
+    }
+    router.push('/(tabs)/communities');
+  };
 
-  const renderProfessionalContact = (contact: ProfessionalContact) => (
-    <View key={contact.id} style={styles.contactCard}>
-      <View style={styles.contactHeader}>
-        {contact.image ? (
-          <Image source={{ uri: contact.image }} style={styles.contactImage} />
-        ) : (
-          <View style={[styles.contactImage, styles.placeholderImage]}>
-            <Users color={Colors.light.tabIconDefault} size={32} />
-          </View>
-        )}
-        <View style={styles.contactInfo}>
-          <Text style={styles.contactName}>{contact.name}</Text>
-          <Text style={styles.contactTitle}>{contact.title}</Text>
-          <Text style={styles.contactLocation}>
-            <MapPin size={14} color={Colors.light.tabIconDefault} /> {contact.location}
-          </Text>
-          {contact.rating && (
-            <View style={styles.ratingContainer}>
-              <Star size={14} color="#FFD700" fill="#FFD700" />
-              <Text style={styles.rating}>{contact.rating}</Text>
-              <Text style={styles.reviewCount}>({contact.reviewCount} reviews)</Text>
-            </View>
-          )}
-        </View>
-        <View style={[
-          styles.availabilityBadge,
-          { backgroundColor: contact.availability === 'available' ? '#4CAF50' : 
-                            contact.availability === 'busy' ? '#FF9800' : '#F44336' }
-        ]}>
-          <Text style={styles.availabilityText}>
-            {contact.availability === 'available' ? 'Available' :
-             contact.availability === 'busy' ? 'Busy' : 'Unavailable'}
-          </Text>
-        </View>
-      </View>
+  const handleCreateCommunity = () => {
+    if (!communityName.trim()) {
+      Alert.alert('Escribe un nombre', 'Necesitamos un nombre corto para que otros encuentren tu comunidad.');
+      return;
+    }
 
-      <Text style={styles.contactDescription}>{contact.description}</Text>
+    createCommunityMutation.mutate({
+      name: communityName.trim(),
+      focusArea: communityFocus.trim() || 'General',
+      description: 'Espacio creado desde la seccion de ayuda profesional.',
+    });
+  };
 
-      <View style={styles.specializationContainer}>
-        {contact.specialization.map((spec) => (
-          <View key={spec} style={styles.specializationTag}>
-            <Text style={styles.specializationText}>{spec}</Text>
-          </View>
-        ))}
-      </View>
-
-      <View style={styles.languagesContainer}>
-        <Text style={styles.languagesLabel}>Languages: </Text>
-        <Text style={styles.languagesText}>{contact.languages.join(', ')}</Text>
-      </View>
-
-      <View style={styles.contactActions}>
-        {contact.phone && (
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => handleCall(contact.phone!)}
-            testID={`call-${contact.id}`}
-          >
-            <Phone size={18} color="white" />
-            <Text style={styles.actionButtonText}>Call</Text>
-          </TouchableOpacity>
-        )}
-        {contact.email && (
-          <TouchableOpacity
-            style={[styles.actionButton, styles.emailButton]}
-            onPress={() => handleEmail(contact.email!)}
-            testID={`email-${contact.id}`}
-          >
-            <Mail size={18} color={Colors.light.tint} />
-            <Text style={[styles.actionButtonText, styles.emailButtonText]}>Email</Text>
-          </TouchableOpacity>
-        )}
-        {contact.website && (
-          <TouchableOpacity
-            style={[styles.actionButton, styles.websiteButton]}
-            onPress={() => handleWebsite(contact.website!)}
-            testID={`website-${contact.id}`}
-          >
-            <Globe size={18} color={Colors.light.tint} />
-            <Text style={[styles.actionButtonText, styles.websiteButtonText]}>Website</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </View>
-  );
-
-  const filters = [
-    { key: 'all' as FilterType, label: 'All', icon: Users },
-    { key: 'psychologist' as FilterType, label: 'Psychologists', icon: Heart },
-    { key: 'therapist' as FilterType, label: 'Therapists', icon: MessageCircle },
-    { key: 'ngo' as FilterType, label: 'Organizations', icon: Users },
-  ];
+  const isLoadingCommunities = communitiesQuery.isLoading || communitiesQuery.isRefetching;
+  const myCommunities = communitiesQuery.data ?? [];
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Professional Help</Text>
-          <Text style={styles.subtitle}>
-            Connect with mental health professionals and support organizations
-          </Text>
+    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top + 12 }]}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <LinearGradient colors={gradientStops} style={styles.heroCard} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+          <View style={styles.heroHeader}>
+            <Text style={styles.heroTitle}>Apoyo profesional y comunidad</Text>
+            <Text style={styles.heroSubtitle}>
+              Conecta con especialistas validados y espacios seguros donde compartir avances y recaidas.
+            </Text>
+            <View style={styles.heroBadges}>
+              <View style={styles.heroBadge}>
+                <Shield size={16} color="#fff" />
+                <Text style={styles.heroBadgeText}>Equipo verificado</Text>
+              </View>
+              <View style={styles.heroBadge}>
+                <Heart size={16} color="#fff" />
+                <Text style={styles.heroBadgeText}>Comunidad activa</Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.heroActions}>
+            <TouchableOpacity
+              onPress={() => router.push('/(tabs)/communities')}
+              style={styles.primaryCta}
+            >
+              <Text style={styles.primaryCtaText}>Explorar comunidades</Text>
+              <ArrowRight size={18} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => router.push('/(tabs)/achievements')}
+              style={styles.secondaryCta}
+            >
+              <Text style={styles.secondaryCtaText}>Compartir logro</Text>
+            </TouchableOpacity>
+          </View>
+        </LinearGradient>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Contactos de emergencia</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.emergencyRow}>
+            {emergencyContacts.map(contact => (
+              <TouchableOpacity
+                key={contact.id}
+                style={styles.emergencyCard}
+                onPress={() => handleEmergencyCall(contact)}
+                activeOpacity={0.9}
+              >
+                <View style={styles.emergencyHeader}>
+                  <Shield size={20} color={Colors.light.tint} />
+                  <View style={styles.emergencyInfo}>
+                    <Text style={styles.emergencyName}>{contact.name}</Text>
+                    <Text style={styles.emergencyPhone}>{contact.phone}</Text>
+                  </View>
+                </View>
+                <Text style={styles.emergencyDescription}>{contact.description}</Text>
+                <View style={styles.emergencyFooter}>
+                  <Text style={styles.emergencyFooterText}>{contact.country}</Text>
+                  {contact.available24h ? <Text style={styles.emergencyBadge}>24/7</Text> : null}
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
 
-        <View style={styles.emergencySection}>
-          <Text style={styles.sectionTitle}>
-            <AlertTriangle size={20} color="#FF4444" /> Emergency Contacts
-          </Text>
-          <Text style={styles.emergencyNote}>
-            If you&apos;re in crisis or having thoughts of self-harm, please reach out immediately:
-          </Text>
-          {emergencyContacts.map(renderEmergencyContact)}
-        </View>
-
-        <View style={styles.filterSection}>
-          <Text style={styles.sectionTitle}>Find Professional Help</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterContainer}>
-            {filters.map((filter) => {
-              const IconComponent = filter.icon;
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Profesionales recomendados</Text>
+            <TouchableOpacity onPress={() => setSelectedFilter('all')}>
+              <Text style={styles.resetFilters}>Ver todos</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+            {FILTERS.map(filter => {
+              const isActive = selectedFilter === filter.id;
               return (
                 <TouchableOpacity
-                  key={filter.key}
-                  style={[
-                    styles.filterButton,
-                    selectedFilter === filter.key && styles.filterButtonActive
-                  ]}
-                  onPress={() => setSelectedFilter(filter.key)}
-                  testID={`filter-${filter.key}`}
+                  key={filter.id}
+                  style={[styles.filterChip, isActive && styles.filterChipActive]}
+                  onPress={() => setSelectedFilter(filter.id)}
                 >
-                  <IconComponent 
-                    size={18} 
-                    color={selectedFilter === filter.key ? 'white' : Colors.light.tint} 
-                  />
-                  <Text style={[
-                    styles.filterButtonText,
-                    selectedFilter === filter.key && styles.filterButtonTextActive
-                  ]}>
+                  <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
                     {filter.label}
                   </Text>
                 </TouchableOpacity>
               );
             })}
           </ScrollView>
+
+          {filteredContacts.map(contact => (
+            <View key={contact.id} style={styles.proCard}>
+              <View style={styles.proHeader}>
+                {contact.image ? (
+                  <Image
+                    source={{ uri: contact.image }}
+                    style={styles.proAvatar}
+                  />
+                ) : (
+                  <View style={[styles.proAvatar, styles.proAvatarFallback]}>
+                    <Users size={28} color={Colors.light.tabIconDefault} />
+                  </View>
+                )}
+                <View style={styles.proInfo}>
+                  <Text style={styles.proName}>{contact.name}</Text>
+                  <Text style={styles.proTitle}>{contact.title}</Text>
+                  <View style={styles.proMetaRow}>
+                    <View style={styles.proMetaChip}>
+                      <Text style={styles.proMetaText}>{contact.location}</Text>
+                    </View>
+                    {contact.rating ? (
+                      <View style={styles.proMetaChip}>
+                        <Heart size={14} color={Colors.light.tint} />
+                        <Text style={styles.proMetaText}>{contact.rating.toFixed(1)} • {contact.reviewCount}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+                <View
+                  style={[styles.availabilityTag, { backgroundColor: `${availabilityColors[contact.availability] ?? '#64748b'}30`, borderColor: availabilityColors[contact.availability] ?? '#64748b' }]}
+                >
+                  <Text
+                    style={[styles.availabilityText, { color: availabilityColors[contact.availability] ?? '#64748b' }]}
+                  >
+                    {formatAvailabilityLabel(contact.availability)}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.proDescription}>{contact.description}</Text>
+
+              <View style={styles.specializationRow}>
+                {contact.specialization.map(item => (
+                  <View key={item} style={styles.specializationPill}>
+                    <Text style={styles.specializationText}>{item}</Text>
+                  </View>
+                ))}
+              </View>
+
+              <View style={styles.actionRow}>
+                <TouchableOpacity style={styles.actionButton} onPress={() => handleCall(contact.phone)}>
+                  <Phone size={18} color="#fff" />
+                  <Text style={styles.actionButtonText}>Llamar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, styles.actionButtonGhost]} onPress={() => handleEmail(contact.email)}>
+                  <Mail size={18} color={Colors.light.tint} />
+                  <Text style={[styles.actionButtonText, styles.actionButtonGhostText]}>Correo</Text>
+                </TouchableOpacity>
+                {contact.website ? (
+                  <TouchableOpacity style={[styles.actionButton, styles.actionButtonGhost]} onPress={() => handleWebsite(contact.website)}>
+                    <Globe size={18} color={Colors.light.tint} />
+                    <Text style={[styles.actionButtonText, styles.actionButtonGhostText]}>Sitio</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              {contact.languages?.length ? (
+                <View style={styles.languageRow}>
+                  <Text style={styles.languageLabel}>Idiomas: </Text>
+                  <Text style={styles.languageText}>{contact.languages.join(', ')}</Text>
+                </View>
+              ) : null}
+            </View>
+          ))}
         </View>
 
-        <View style={styles.contactsSection}>
-          {filteredContacts.map(renderProfessionalContact)}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Acciones rapidas</Text>
+          <View style={styles.quickGrid}>
+            {QUICK_ACTIONS.map(action => {
+              const Icon = action.icon;
+              return (
+                <TouchableOpacity
+                  key={action.id}
+                  style={styles.quickCard}
+                  onPress={() => router.push(action.target)}
+                >
+                  <View style={styles.quickIconWrapper}>
+                    <Icon size={20} color={Colors.light.tint} />
+                  </View>
+                  <Text style={styles.quickTitle}>{action.label}</Text>
+                  <Text style={styles.quickDescription}>{action.description}</Text>
+                  <ArrowUpRight size={16} color={Colors.light.tint} style={styles.quickArrow} />
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
-        <View style={styles.disclaimer}>
-          <Text style={styles.disclaimerText}>
-            This information is provided for educational purposes only and should not replace professional medical advice. 
-            Always consult with qualified healthcare providers for proper diagnosis and treatment.
-          </Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Historias de la comunidad</Text>
+          {COMMUNITY_STORIES.map(story => (
+            <TouchableOpacity
+              key={story.id}
+              style={styles.storyCard}
+              onPress={() => handleStoryPress(story)}
+              activeOpacity={0.9}
+            >
+              <View style={styles.storyHeader}>
+                <View style={styles.storyBadge}>
+                  <Users size={16} color={Colors.light.tint} />
+                </View>
+                <View style={styles.storyHeaderText}>
+                  <Text style={styles.storyAuthor}>{story.author}</Text>
+                  <Text style={styles.storyFocus}>{story.focus}</Text>
+                </View>
+              </View>
+              <Text style={styles.storyTitle}>{story.title}</Text>
+              <Text style={styles.storySummary}>{story.summary}</Text>
+              <View style={styles.storyFooter}>
+                <View style={styles.storyStat}>
+                  <Heart size={16} color={Colors.light.tint} />
+                  <Text style={styles.storyStatText}>{story.reactions}</Text>
+                </View>
+                <View style={styles.storyStat}>
+                  <MessageCircle size={16} color={Colors.light.tabIconDefault} />
+                  <Text style={styles.storyStatText}>{story.replies}</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Mis comunidades</Text>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/communities')}>
+              <Text style={styles.resetFilters}>Ver todas</Text>
+            </TouchableOpacity>
+          </View>
+
+          {!isAuthenticated ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>Inicia sesion para crear y seguir comunidades</Text>
+              <Text style={styles.emptySubtitle}>
+                Podras compartir avances, recibir apoyo y crear espacios a tu ritmo.
+              </Text>
+            </View>
+          ) : isLoadingCommunities ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>Cargando tus comunidades...</Text>
+            </View>
+          ) : myCommunities.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>Aun no sigues ninguna comunidad</Text>
+              <Text style={styles.emptySubtitle}>
+                Explora grupos en la pestaña comunidades o crea el tuyo en segundos.
+              </Text>
+            </View>
+          ) : (
+            myCommunities.slice(0, 3).map((community: Community) => (
+              <View key={community.id} style={styles.communityCardRow}>
+                <View style={styles.communityInfoBlock}>
+                  <Text style={styles.communityRowName}>{community.name}</Text>
+                  <Text style={styles.communityRowDescription}>{community.focusArea}</Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.secondaryCta, styles.communityRowButton]}
+                  onPress={() => {
+                    const isMember = community.isMember;
+                    if (isMember) {
+                      leaveCommunityMutation.mutate(community.id);
+                    } else {
+                      joinCommunityMutation.mutate(community.id);
+                    }
+                  }}
+                >
+                  <Text style={styles.secondaryCtaText}>{community.isMember ? 'Salir' : 'Unirme'}</Text>
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
+
+          {isAuthenticated ? (
+            <View style={styles.newCommunityCard}>
+              <Text style={styles.newCommunityTitle}>Crear nuevo espacio</Text>
+              <Text style={styles.newCommunitySubtitle}>
+                Diseña un punto de encuentro para personas que comparten tu reto actual.
+              </Text>
+              <TouchableOpacity style={styles.createCommunityButton} onPress={handleCreateCommunity}>
+                <Text style={styles.createCommunityButtonText}>
+                  {createCommunityMutation.isPending ? 'Publicando...' : 'Publicar comunidad'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
-    backgroundColor: Colors.light.background,
+    backgroundColor: Colors.light.backgroundSecondary,
   },
-  scrollView: {
-    flex: 1,
+  scrollContent: {
+    paddingBottom: 32,
   },
-  header: {
-    padding: 24,
-    paddingBottom: 16,
+  section: {
+    paddingHorizontal: 20,
+    marginTop: 24,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: Colors.light.text,
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: Colors.light.tabIconDefault,
-    lineHeight: 22,
-  },
-  emergencySection: {
-    padding: 24,
-    paddingTop: 0,
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 20,
-    fontWeight: 'bold',
+    fontWeight: '700',
     color: Colors.light.text,
-    marginBottom: 12,
+  },
+  resetFilters: {
+    fontSize: 14,
+    color: Colors.light.tint,
+    fontWeight: '600',
+  },
+  heroCard: {
+    marginHorizontal: 20,
+    borderRadius: 24,
+    padding: 24,
+    overflow: 'hidden',
+  },
+  heroHeader: {
+    gap: 12,
+  },
+  heroTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+  heroSubtitle: {
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.85)',
+    lineHeight: 21,
+  },
+  heroBadges: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  heroBadge: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+  },
+  heroBadgeText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  heroActions: {
+    marginTop: 20,
+    flexDirection: 'row',
+    gap: 12,
+  },
+  primaryCta: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingVertical: 12,
+    borderRadius: 14,
   },
-  emergencyNote: {
-    fontSize: 14,
-    color: Colors.light.tabIconDefault,
-    marginBottom: 16,
-    lineHeight: 20,
+  primaryCtaText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  secondaryCta: {
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  secondaryCtaText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  emergencyRow: {
+    gap: 16,
   },
   emergencyCard: {
-    backgroundColor: '#FFF5F5',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF4444',
+    width: 240,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
   },
   emergencyHeader: {
     flexDirection: 'row',
+    gap: 12,
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   emergencyInfo: {
     flex: 1,
-    marginLeft: 12,
   },
   emergencyName: {
     fontSize: 16,
@@ -304,216 +658,358 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
   },
   emergencyPhone: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FF4444',
-    marginTop: 2,
+    fontSize: 14,
+    color: Colors.light.tint,
   },
-  available24Badge: {
-    backgroundColor: '#FF4444',
-    paddingHorizontal: 8,
+  emergencyDescription: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+  },
+  emergencyFooter: {
+    marginTop: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  emergencyFooterText: {
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+  },
+  emergencyBadge: {
+    backgroundColor: `${Colors.light.tint}1A`,
+    color: Colors.light.tint,
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 12,
-  },
-  available24Text: {
-    color: 'white',
+    borderRadius: 999,
     fontSize: 12,
     fontWeight: '600',
   },
-  emergencyDescription: {
-    fontSize: 14,
-    color: Colors.light.tabIconDefault,
-    lineHeight: 18,
+  filterRow: {
+    gap: 12,
+    paddingBottom: 6,
   },
-  filterSection: {
-    paddingHorizontal: 24,
-    marginBottom: 16,
-  },
-  filterContainer: {
-    marginTop: 12,
-  },
-  filterButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
+  filterChip: {
+    paddingHorizontal: 14,
     paddingVertical: 8,
+    backgroundColor: Colors.light.background,
     borderRadius: 20,
-    backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: Colors.light.tint,
-    marginRight: 12,
+    borderColor: Colors.light.border,
   },
-  filterButtonActive: {
+  filterChipActive: {
     backgroundColor: Colors.light.tint,
     borderColor: Colors.light.tint,
   },
-  filterButtonText: {
-    marginLeft: 6,
-    fontSize: 14,
+  filterChipText: {
+    fontSize: 13,
+    color: Colors.light.tabIconDefault,
     fontWeight: '600',
-    color: Colors.light.tint,
   },
-  filterButtonTextActive: {
-    color: 'white',
+  filterChipTextActive: {
+    color: '#fff',
   },
-  contactsSection: {
-    paddingHorizontal: 24,
+  proCard: {
+    marginTop: 16,
+    borderRadius: 20,
+    padding: 18,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: Colors.light.border,
   },
-  contactCard: {
-    backgroundColor: 'white',
+  proHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  proAvatar: {
+    width: 58,
+    height: 58,
     borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
   },
-  contactHeader: {
-    flexDirection: 'row',
-    marginBottom: 16,
-  },
-  contactImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    marginRight: 16,
-  },
-  placeholderImage: {
-    backgroundColor: '#f0f0f0',
+  proAvatarFallback: {
+    backgroundColor: Colors.light.backgroundSecondary,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
   },
-  contactInfo: {
+  proInfo: {
     flex: 1,
+    gap: 4,
   },
-  contactName: {
-    fontSize: 18,
-    fontWeight: 'bold',
+  proName: {
+    fontSize: 16,
+    fontWeight: '700',
     color: Colors.light.text,
-    marginBottom: 4,
   },
-  contactTitle: {
-    fontSize: 14,
-    color: Colors.light.tint,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  contactLocation: {
-    fontSize: 12,
+  proTitle: {
+    fontSize: 13,
     color: Colors.light.tabIconDefault,
-    marginBottom: 4,
   },
-  ratingContainer: {
+  proMetaRow: {
     flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  proMetaChip: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: Colors.light.backgroundSecondary,
     alignItems: 'center',
   },
-  rating: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.light.text,
-    marginLeft: 4,
-  },
-  reviewCount: {
+  proMetaText: {
     fontSize: 12,
     color: Colors.light.tabIconDefault,
-    marginLeft: 4,
   },
-  availabilityBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+  availabilityTag: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 12,
-    alignSelf: 'flex-start',
+    borderWidth: 1,
   },
   availabilityText: {
-    color: 'white',
     fontSize: 12,
     fontWeight: '600',
   },
-  contactDescription: {
-    fontSize: 14,
-    color: Colors.light.tabIconDefault,
-    lineHeight: 20,
-    marginBottom: 16,
+  proDescription: {
+    marginTop: 12,
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.light.textSecondary,
   },
-  specializationContainer: {
+  specializationRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginBottom: 12,
+    gap: 8,
+    marginTop: 12,
   },
-  specializationTag: {
-    backgroundColor: '#E3F2FD',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginRight: 8,
-    marginBottom: 4,
+  specializationPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: `${Colors.light.tint}12`,
   },
   specializationText: {
     fontSize: 12,
     color: Colors.light.tint,
-    fontWeight: '500',
-  },
-  languagesContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  languagesLabel: {
-    fontSize: 14,
     fontWeight: '600',
-    color: Colors.light.text,
   },
-  languagesText: {
-    fontSize: 14,
-    color: Colors.light.tabIconDefault,
-  },
-  contactActions: {
+  actionRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
+    marginTop: 16,
   },
   actionButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.light.tint,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    flex: 1,
     justifyContent: 'center',
-  },
-  emailButton: {
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: Colors.light.tint,
-  },
-  websiteButton: {
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: Colors.light.tint,
+    gap: 6,
+    backgroundColor: Colors.light.tint,
+    borderRadius: 12,
+    paddingVertical: 10,
   },
   actionButtonText: {
-    color: 'white',
     fontSize: 14,
+    color: '#fff',
     fontWeight: '600',
-    marginLeft: 6,
   },
-  emailButtonText: {
+  actionButtonGhost: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+  },
+  actionButtonGhostText: {
     color: Colors.light.tint,
   },
-  websiteButtonText: {
-    color: Colors.light.tint,
+  languageRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  disclaimer: {
-    padding: 24,
-    paddingTop: 16,
+  languageLabel: {
+    fontSize: 13,
+    color: Colors.light.text,
+    fontWeight: '600',
   },
-  disclaimerText: {
+  languageText: {
+    fontSize: 13,
+    color: Colors.light.tabIconDefault,
+  },
+  quickGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  quickCard: {
+    flexBasis: '48%',
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    position: 'relative',
+    gap: 8,
+  },
+  quickIconWrapper: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: Colors.light.backgroundSecondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  quickDescription: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    lineHeight: 18,
+  },
+  quickArrow: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+  },
+  storyCard: {
+    marginTop: 16,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    gap: 10,
+  },
+  storyHeader: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  storyBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 16,
+    backgroundColor: `${Colors.light.tint}15`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  storyHeaderText: {
+    flex: 1,
+  },
+  storyAuthor: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  storyFocus: {
     fontSize: 12,
     color: Colors.light.tabIconDefault,
-    lineHeight: 16,
-    textAlign: 'center',
-    fontStyle: 'italic',
+  },
+  storyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  storySummary: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    lineHeight: 19,
+  },
+  storyFooter: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  storyStat: {
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'center',
+  },
+  storyStatText: {
+    fontSize: 13,
+    color: Colors.light.tabIconDefault,
+  },
+  emptyCard: {
+    marginTop: 12,
+    backgroundColor: Colors.light.background,
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    gap: 8,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    lineHeight: 18,
+  },
+  communityCardRow: {
+    marginTop: 12,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  communityInfoBlock: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  communityRowName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  communityRowDescription: {
+    fontSize: 13,
+    color: Colors.light.tabIconDefault,
+  },
+  communityRowButton: {
+    backgroundColor: `${Colors.light.tint}15`,
+    borderColor: 'transparent',
+  },
+  newCommunityCard: {
+    marginTop: 18,
+    backgroundColor: Colors.light.background,
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    gap: 12,
+  },
+  newCommunityTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  newCommunitySubtitle: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    lineHeight: 18,
+  },
+  createCommunityButton: {
+    marginTop: 8,
+    backgroundColor: Colors.light.tint,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  createCommunityButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

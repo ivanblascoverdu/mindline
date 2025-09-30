@@ -3,8 +3,9 @@ import {
   CheckSquare,
   BarChart3,
   Target,
-  Trophy,
-  MessageCircle,
+  Sparkles,
+  Users,
+  BookOpen,
 } from "lucide-react-native";
 import React from "react";
 
@@ -30,7 +31,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Tasks",
+          title: "Tareas",
           tabBarIcon: ({ color, size }) => (
             <CheckSquare color={color} size={size} />
           ),
@@ -39,35 +40,42 @@ export default function TabLayout() {
       <Tabs.Screen
         name="missions"
         options={{
-          title: "Missions",
+          title: "Misiones",
           tabBarIcon: ({ color, size }) => <Target color={color} size={size} />,
         }}
       />
       <Tabs.Screen
-        name="rankings"
+        name="achievements"
         options={{
-          title: "Rankings",
-          tabBarIcon: ({ color, size }) => <Trophy color={color} size={size} />,
+          title: "Logros",
+          tabBarIcon: ({ color, size }) => <Sparkles color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="communities"
+        options={{
+          title: "Comunidades",
+          tabBarIcon: ({ color, size }) => <Users color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="courses"
+        options={{
+          title: "Cursos",
+          tabBarIcon: ({ color, size }) => <BookOpen color={color} size={size} />,
         }}
       />
       <Tabs.Screen
         name="stats"
         options={{
-          title: "Stats",
+          title: "Estadisticas",
           tabBarIcon: ({ color, size }) => (
             <BarChart3 color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="chat"
-        options={{
-          title: "Support",
-          tabBarIcon: ({ color, size }) => (
-            <MessageCircle color={color} size={size} />
           ),
         }}
       />
     </Tabs>
   );
 }
+
+
